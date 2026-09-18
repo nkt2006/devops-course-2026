@@ -18,3 +18,5 @@ git add .
 git commit -m "практика номер 1"
 git push origin main
 ```
+
+# Multi-remote test
