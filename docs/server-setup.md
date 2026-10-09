@@ -173,7 +173,40 @@ hostname -f
 
 Ожидаемое полное имя: `devops-vm.devops.local`.
 
-## 8. Снимки состояния
+## 8. Веб-сервер
+
+- Установленный пакет: `nginx`.
+- Конфигурация ресурса: `/etc/nginx/sites-available/devops-site`.
+- Активная конфигурация: символическая ссылка `/etc/nginx/sites-enabled/devops-site`.
+- Каталог ресурса: `/var/www/devops-site`.
+- Владелец каталога и файлов: `devops:devops`.
+- Права каталогов: `755`; права файлов: `644`.
+- Сертификат: `/etc/ssl/certs/devops.crt`, владелец `root:root`, права `644`.
+- Закрытый ключ: `/etc/ssl/private/devops.key`, владелец `root:root`, права `600`.
+- Срок действия самоподписанного сертификата: 365 дней.
+
+Команда формирования сертификата:
+
+```bash
+sudo openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+  -keyout /etc/ssl/private/devops.key \
+  -out /etc/ssl/certs/devops.crt \
+  -subj "/CN=devops.local" \
+  -addext "subjectAltName=DNS:devops.local"
+```
+
+Проверка конфигурации, состояния службы и прав:
+
+```bash
+sudo nginx -t
+systemctl is-active nginx
+find /var/www/devops-site -type f -perm -o+w
+sudo stat -c '%a %U:%G %n' /etc/ssl/private/devops.key
+```
+
+HTTP-запросы перенаправляются на HTTPS кодом `301`. HTTPS-ресурс слушает порт `443`, использует TLS 1.2 и TLS 1.3 и обслуживает статические файлы из `/var/www/devops-site`.
+
+## 9. Снимки состояния
 
 | Снимок | Момент создания | Состояние |
 |---|---|---|
@@ -181,7 +214,7 @@ hostname -f
 | `02-keys-configured` | 08.10.2026 21:12 | Настроены ключ и профиль SSH |
 | `03-ssh-hardened` | 08.10.2026 21:26 | SSH усилен и переведён на порт 2222 |
 
-## 9. Итоговая проверка
+## 10. Итоговая проверка
 
 ```bash
 ssh devops
