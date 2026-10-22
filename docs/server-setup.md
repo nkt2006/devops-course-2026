@@ -206,15 +206,89 @@ sudo stat -c '%a %U:%G %n' /etc/ssl/private/devops.key
 
 HTTP-запросы перенаправляются на HTTPS кодом `301`. HTTPS-ресурс слушает порт `443`, использует TLS 1.2 и TLS 1.3 и обслуживает статические файлы из `/var/www/devops-site`.
 
-## 9. Снимки состояния
+## 9. Контейнеризация
+
+Docker Engine Community 29.9.2 и плагин Docker Compose v5.6.1 установлены на Ubuntu 24.04 ARM64 из официального apt-репозитория Docker. Пакет `docker.io` не используется.
+
+Установка:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+# /etc/apt/sources.list.d/docker.sources:
+# Types: deb
+# URIs: https://download.docker.com/linux/ubuntu
+# Suites: noble
+# Components: stable
+# Architectures: arm64
+# Signed-By: /etc/apt/keyrings/docker.asc
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo systemctl enable --now docker
+sudo usermod -aG docker devops
+```
+
+После добавления в группу требуется новая SSH-сессия. Участник группы `docker` — `devops`; группа предоставляет административные возможности, поэтому в неё не включаются пользователи без права `sudo`.
+
+Исходные файлы находятся в каталоге `app/` репозитория, проект на сервере — `/home/devops/app`. Образ приложения — `devops-app:1.0`, процесс Gunicorn работает от непривилегированного пользователя `app`. Для передачи изменений с Mac:
+
+```bash
+rsync -avz --delete --exclude=.env --dry-run app/ devops:app/
+rsync -avz --delete --exclude=.env app/ devops:app/
+```
+
+Файл `/home/devops/app/.env` создаётся только на сервере, принадлежит `devops:devops`, имеет права `600` и исключён из Git и контекста сборки. Репозиторий содержит только `.env.example` с заглушкой пароля. При восстановлении новой конфигурации:
+
+```bash
+cd /home/devops/app
+cp .env.example .env
+chmod 600 .env
+sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
+docker compose up -d --build --wait
+```
+
+Существующий `.env` при повторном развёртывании не заменяется. Пароль в нём должен соответствовать паролю уже созданной базы.
+
+Compose создаёт контейнеры `app-app-1`, `app-db-1`, сеть `app_backend` и именованный том `app_db_data`. PostgreSQL использует образ `postgres:16-alpine`, данные монтируются в `/var/lib/postgresql/data`. Сервис `app` получает `DB_HOST=db` и использует DNS сети Compose. Приложение запускается после перехода БД в `healthy` благодаря `depends_on.condition: service_healthy`.
+
+Публикуется только `127.0.0.1:5000:5000`. Порт `5432` не публикуется. Для сохранения данных используется `docker compose down` без `-v`; удаление тома требуется только в демонстрационном тесте с новым счётчиком.
+
+В HTTPS-блок `/etc/nginx/sites-available/devops-site` добавлен обратный прокси:
+
+```nginx
+location /app/ {
+    proxy_pass http://127.0.0.1:5000/;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+Завершающий `/` в `proxy_pass` заменяет префикс `/app/`, поэтому `/app/health` передаётся как `/health`. Статический ресурс `/` и сертификат из ПР №6 сохранены. Проверки с Mac:
+
+```bash
+curl --cacert ~/devops.crt https://devops.local/app/
+curl --cacert ~/devops.crt https://devops.local/app/health
+curl --cacert ~/devops.crt -I https://devops.local/
+```
+
+Для применения изменений Nginx выполняются `sudo nginx -t` и `sudo systemctl reload nginx`. Аудит запускается внутри VM: `APP_PROJECT_DIR=/home/devops/app bash scripts/audit.sh`. Раздел `[5]` проверяет Docker, готовность БД, привязку портов и права `.env`.
+
+## 10. Снимки состояния
 
 | Снимок | Момент создания | Состояние |
 |---|---|---|
 | `01-clean-install` | 08.10.2026 20:37 | Чистая установленная Ubuntu Server |
 | `02-keys-configured` | 08.10.2026 21:12 | Настроены ключ и профиль SSH |
 | `03-ssh-hardened` | 08.10.2026 21:26 | SSH усилен и переведён на порт 2222 |
+| `04-nginx-https` | 09.10.2026 15:13 | Nginx, HTTPS и перенаправление HTTP |
+| `05-docker-compose` | 22.10.2026 | Приложение и PostgreSQL в Compose, том данных и прокси `/app/` |
 
-## 10. Итоговая проверка
+## 11. Итоговая проверка
 
 ```bash
 ssh devops

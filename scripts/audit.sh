@@ -73,5 +73,32 @@ check "Нет файлов, доступных для записи всем" \
 check "Права закрытого ключа равны 600" \
     "600" "$(sudo stat -c '%a' /etc/ssl/private/devops.key 2>/dev/null)"
 
+echo "[5] Контейнеризация"
+check "Служба docker активна" \
+    "active" "$(systemctl is-active docker 2>/dev/null)"
+
+check "Контейнер СУБД находится в состоянии healthy" \
+    "healthy" "$(docker inspect -f '{{.State.Health.Status}}' app-db-1 2>/dev/null)"
+
+if sockets="$(ss -H -ltn 2>/dev/null)"; then
+    unsafe_ports="$(awk '$4 ~ /:(5000|5432)$/ && $4 !~ /^127[.]0[.]0[.]1:/ {print $4}' <<< "$sockets")"
+    if [[ -z "$unsafe_ports" ]] && awk '$4 == "127.0.0.1:5000" {found=1} END {exit !found}' <<< "$sockets"; then
+        ports_safe=yes
+    else
+        ports_safe=no
+    fi
+else
+    ports_safe=no
+fi
+check "Порт приложения доступен только на 127.0.0.1, внешних портов 5000 и 5432 нет" \
+    "yes" "$ports_safe"
+
+# При запуске через sudo проверяем проект исходного пользователя.
+project_user="${SUDO_USER:-$USER}"
+project_home="$(getent passwd "$project_user" | cut -d: -f6)"
+project_dir="${APP_PROJECT_DIR:-${project_home}/app}"
+check "Права файла окружения равны 600" \
+    "600" "$(stat -c '%a' "$project_dir/.env" 2>/dev/null)"
+
 echo "Пройдено: $PASS, не пройдено: $FAIL"
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1
